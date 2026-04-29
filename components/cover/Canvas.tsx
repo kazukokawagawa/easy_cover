@@ -79,8 +79,8 @@ export default function Canvas() {
               backgroundColor: bgColor,
               backdropFilter: icon.bgBlur > 0 ? `blur(${icon.bgBlur}px)` : 'none',
               WebkitBackdropFilter: icon.bgBlur > 0 ? `blur(${icon.bgBlur}px)` : 'none',
-              padding: icon.bgShape !== 'none' ? `${icon.padding}px` : 0,
-              borderRadius: icon.bgShape === 'circle' ? '50%' : icon.bgShape === 'rounded-square' ? `${icon.radius}px` : icon.bgShape === 'square' ? '0' : '0',
+              padding: icon.bgShape !== 'none' ? `${(icon.size * icon.padding) / 100}px` : 0,
+              borderRadius: icon.bgShape === 'circle' ? '50%' : icon.bgShape === 'rounded-square' ? `${icon.radius / 2}%` : icon.bgShape === 'square' ? '0' : '0',
           }}
       >
           {icon.customIconUrl ? (
@@ -91,7 +91,7 @@ export default function Canvas() {
                   style={{
                       width: `${icon.size}px`,
                       height: `${icon.size}px`,
-                      borderRadius: `${icon.customIconRadius}px`,
+                      borderRadius: `${icon.customIconRadius / 2}%`,
                   }}
               />
           ) : (
@@ -102,15 +102,16 @@ export default function Canvas() {
   };
 
   // Helper to render Text
-  const renderText = (content: string, offsetX: number = 0, offsetY: number = 0) => (
+  const renderText = (content: string, offsetX: number = 0, offsetY: number = 0, align: 'left' | 'center' | 'right' = 'center') => (
       <div
-          className="whitespace-pre text-center leading-tight"
+          className="whitespace-pre leading-tight"
           style={{
               transform: `translate(${offsetX}px, ${offsetY}px) rotate(${text.rotation}deg)`,
               fontSize: `${text.fontSize}px`,
               color: text.color,
               fontWeight: text.fontWeight,
               fontFamily: text.font,
+              textAlign: align,
               WebkitTextStroke: text.strokeWidth > 0 ? `${text.strokeWidth}px ${text.strokeColor}` : undefined,
           }}
       >
@@ -118,41 +119,90 @@ export default function Canvas() {
       </div>
   );
 
-  // Determine Layout Content
-  const renderContent = () => {
-      // Default to Overlay Layout
-      let leftContent = text.content;
-      let rightContent = '';
+  // Layout: split text anchored to the canvas centerline.
+  // Left half hosts left text, right half hosts right text;
+  // per-side textAlign controls whether the inner text hugs the centerline.
+  const renderAbsoluteIcon = () => icon.visible && (icon.placement === 'front' || icon.placement === 'behind') ? (
+      <div
+          className="absolute top-1/2 left-1/2"
+          style={{
+              transform: `translate(calc(-50% + ${icon.x}px), calc(-50% + ${icon.y}px))`,
+              zIndex: icon.placement === 'front' ? 20 : 5,
+          }}
+      >
+          {renderIcon()}
+      </div>
+  ) : null;
 
-      if (text.isSplit && text.content.length > 1) {
-          const mid = Math.ceil(text.content.length / 2);
-          leftContent = text.content.slice(0, mid);
-          rightContent = text.content.slice(mid);
-      }
+  const renderInlineIcon = () => icon.visible ? (
+      <div
+          className="flex-shrink-0"
+          style={{ transform: `translate(${icon.x}px, ${icon.y}px)` }}
+      >
+          {renderIcon()}
+      </div>
+  ) : null;
 
-      return (
-          <div className="grid place-items-center relative">
-              <div className="z-10 flex items-center justify-center">
-                  {text.isSplit ? (
-                      <>
-                        {renderText(leftContent, text.leftOffsetX, text.leftOffsetY)}
-                        {renderText(rightContent, text.rightOffsetX, text.rightOffsetY)}
-                      </>
-                  ) : (
-                      renderText(text.content, text.x, text.y)
-                  )}
+  const isInline = icon.visible && (icon.placement === 'left' || icon.placement === 'right');
+
+  const renderContent = () => (
+      <div className="absolute inset-0 pointer-events-none">
+          {renderAbsoluteIcon()}
+          {isInline ? (
+              <div className="absolute inset-0 flex items-center justify-center" style={{ zIndex: 10 }}>
+                  {icon.placement === 'left' && renderInlineIcon()}
+                  <div className="flex items-center">
+                      <div
+                          style={{
+                              justifyContent:
+                                  text.leftAlign === 'left' ? 'flex-start' : text.leftAlign === 'right' ? 'flex-end' : 'center',
+                              display: 'flex',
+                          }}
+                      >
+                          {renderText(text.leftContent, text.leftOffsetX, text.leftOffsetY, text.leftAlign)}
+                      </div>
+                      <div
+                          style={{
+                              justifyContent:
+                                  text.rightAlign === 'left' ? 'flex-start' : text.rightAlign === 'right' ? 'flex-end' : 'center',
+                              display: 'flex',
+                          }}
+                      >
+                          {renderText(text.rightContent, text.rightOffsetX, text.rightOffsetY, text.rightAlign)}
+                      </div>
+                  </div>
+                  {icon.placement === 'right' && renderInlineIcon()}
               </div>
-              <div 
-                  className="z-20 absolute"
-                  style={{
-                      transform: `translate(${icon.x}px, ${icon.y}px)`
-                  }}
-              >
-                  {renderIcon()}
-              </div>
-          </div>
-      );
-  };
+          ) : (
+              <>
+                  <div
+                      className="absolute top-1/2 -translate-y-1/2 flex items-center"
+                      style={{
+                          left: 0,
+                          width: '50%',
+                          zIndex: 10,
+                          justifyContent:
+                              text.leftAlign === 'left' ? 'flex-start' : text.leftAlign === 'right' ? 'flex-end' : 'center',
+                      }}
+                  >
+                      {renderText(text.leftContent, text.leftOffsetX, text.leftOffsetY, text.leftAlign)}
+                  </div>
+                  <div
+                      className="absolute top-1/2 -translate-y-1/2 flex items-center"
+                      style={{
+                          left: '50%',
+                          width: '50%',
+                          zIndex: 10,
+                          justifyContent:
+                              text.rightAlign === 'left' ? 'flex-start' : text.rightAlign === 'right' ? 'flex-end' : 'center',
+                      }}
+                  >
+                      {renderText(text.rightContent, text.rightOffsetX, text.rightOffsetY, text.rightAlign)}
+                  </div>
+              </>
+          )}
+      </div>
+  );
 
   return (
     <div className="flex-1 bg-gray-100 dark:bg-gray-900 overflow-hidden relative w-full h-[40vh] md:h-full min-w-0 flex-shrink-0 md:flex-shrink">
@@ -168,7 +218,7 @@ export default function Canvas() {
           transform: `translate(-50%, -50%) scale(${scale})`,
           transformOrigin: 'center',
         }}
-        className="transition-all duration-300"
+        className="transition-[width,height] duration-300"
       >
         <div 
             id="canvas-export-target" 

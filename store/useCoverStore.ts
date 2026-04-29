@@ -11,19 +11,19 @@ export const RATIOS: { label: AspectRatio; width: number; height: number }[] = [
 ];
 
 interface TextSettings {
-  content: string;
   fontSize: number;
   color: string;
   strokeColor: string;
   strokeWidth: number;
   fontWeight: number;
-  x: number;
-  y: number;
   rotation: number;
   // Font settings
   font: string;
-  // Split settings
-  isSplit: boolean;
+  // Split content (left/right of the canvas centerline)
+  leftContent: string;
+  rightContent: string;
+  leftAlign: 'left' | 'center' | 'right';
+  rightAlign: 'left' | 'center' | 'right';
   leftOffsetX: number;
   leftOffsetY: number;
   rightOffsetX: number;
@@ -31,6 +31,8 @@ interface TextSettings {
 }
 
 interface IconSettings {
+  visible: boolean;
+  placement: 'front' | 'behind' | 'left' | 'right';
   name: string; // identifier for the icon
   size: number;
   color: string; // useful if we allow tinting, even for colored icons
@@ -91,23 +93,25 @@ export const useCoverStore = create<CoverState>((set) => ({
   selectedRatios: ['16:9'],
   showRuler: true,
   text: {
-    content: '封面标题',
     fontSize: 160,
     color: '#000000',
     strokeColor: '#ffffff',
     strokeWidth: 0,
     fontWeight: 700,
-    x: 0,
-    y: 0,
     rotation: 0,
     font: 'Inter, sans-serif',
-    isSplit: false,
+    leftContent: '左侧',
+    rightContent: '右侧',
+    leftAlign: 'center',
+    rightAlign: 'center',
     leftOffsetX: 0,
     leftOffsetY: 0,
     rightOffsetX: 0,
     rightOffsetY: 0,
   },
   icon: {
+    visible: true,
+    placement: 'front',
     name: 'logos:react',
     size: 120,
     color: '#000000',
@@ -117,8 +121,8 @@ export const useCoverStore = create<CoverState>((set) => ({
     rotation: 0,
     bgShape: 'rounded-square', // Default to a nice card look
     bgColor: '#ffffff',
-    padding: 40,
-    radius: 40,
+    padding: 30,
+    radius: 20,
     shadowColor: 'rgba(0,0,0,0.3)',
     shadowBlur: 6,
     shadowOffsetY: 4,

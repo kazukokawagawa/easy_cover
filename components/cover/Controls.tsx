@@ -14,7 +14,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { IconPicker } from '@/components/cover/IconPicker';
 import { Separator } from '@/components/ui/separator';
-import { Download, RotateCcw, Maximize, Github, ExternalLink, Settings2, Link as LinkIcon, Link2, Upload } from 'lucide-react';
+import { Download, RotateCcw, Maximize, Github, ExternalLink, Settings2, Link as LinkIcon, Link2, Upload, HardDrive, Search, AlignLeft, AlignCenter, AlignRight, Lock, Unlock, ArrowLeftRight, MoveRight } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { toPng } from 'html-to-image';
 
 // Helper component for Reset Button
@@ -29,14 +30,6 @@ const ResetButton = ({ onClick, tooltip = "重置" }: { onClick: () => void, too
         <RotateCcw className="h-3 w-3" />
     </Button>
 );
-
-const SPLIT_PRESETS = [
-    { name: '默认', left: { x: 0, y: 0 }, right: { x: 0, y: 0 } },
-    { name: '上下错位', left: { x: 0, y: -40 }, right: { x: 0, y: 40 } },
-    { name: '左右分离', left: { x: -60, y: 0 }, right: { x: 60, y: 0 } },
-    { name: '对角分离', left: { x: -40, y: -40 }, right: { x: 40, y: 40 } },
-    { name: '聚拢', left: { x: 20, y: 0 }, right: { x: -20, y: 0 } },
-];
 
 const FONTS = [
     { name: 'Inter (默认)', value: 'Inter, sans-serif', weights: [100, 200, 300, 400, 500, 600, 700, 800, 900] },
@@ -54,19 +47,7 @@ const FONTS = [
     { name: '楷体', value: 'KaiTi, serif', weights: [400] },
 ];
 
-const WEIGHTS = {
-    100: 'Thin (100)',
-    200: 'ExtraLight (200)',
-    300: 'Light (300)',
-    400: 'Regular (400)',
-    500: 'Medium (500)',
-    600: 'SemiBold (600)',
-    700: 'Bold (700)',
-    800: 'ExtraBold (800)',
-    900: 'Black (900)',
-};
-
-const SliderWithInput = ({ 
+const SliderWithInput = ({
     label, 
     value, 
     onChange, 
@@ -109,6 +90,16 @@ const SliderWithInput = ({
 export default function Controls() {
   const store = useCoverStore();
 
+  // Pixel-sized sliders should scale with the canvas, not be hard-pinned.
+  // Base every "size/distance/blur radius" max on the largest edge of the active canvas.
+  const canvasMax = React.useMemo(() => {
+    const active = RATIOS.filter((r) => store.selectedRatios.includes(r.label));
+    if (active.length === 0) return 2100;
+    return Math.max(...active.map((r) => Math.max(r.width, r.height)));
+  }, [store.selectedRatios]);
+  const pct = (p: number) => Math.max(1, Math.round(canvasMax * p));
+
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -142,40 +133,90 @@ export default function Controls() {
     }
   };
 
+  const [localFonts, setLocalFonts] = React.useState<{ family: string; fullName: string; postscriptName: string }[]>([]);
+  const [localFontsOpen, setLocalFontsOpen] = React.useState(false);
+  const [localFontQuery, setLocalFontQuery] = React.useState('');
+  const [localFontsLoading, setLocalFontsLoading] = React.useState(false);
+
+  const [isLocalFontApiSupported, setIsLocalFontApiSupported] = React.useState(false);
+  React.useEffect(() => {
+    setIsLocalFontApiSupported('queryLocalFonts' in window);
+  }, []);
+
+  const handleLoadLocalFonts = async () => {
+    if (!isLocalFontApiSupported) {
+        alert('当前浏览器不支持本地字体读取 API（需要 Chromium 系浏览器，且页面运行于 HTTPS 或 localhost）。');
+        return;
+    }
+    try {
+        setLocalFontsLoading(true);
+        // @ts-expect-error - Local Font Access API is not in default TS lib
+        const fonts: Array<{ family: string; fullName: string; postscriptName: string }> = await window.queryLocalFonts();
+        // Deduplicate by family
+        const seen = new Set<string>();
+        const unique = fonts.filter((f) => {
+            if (seen.has(f.family)) return false;
+            seen.add(f.family);
+            return true;
+        });
+        unique.sort((a, b) => a.family.localeCompare(b.family));
+        setLocalFonts(unique);
+        setLocalFontsOpen(true);
+    } catch (err) {
+        console.error('Failed to query local fonts', err);
+        alert('读取本地字体失败：' + (err instanceof Error ? err.message : '未知错误'));
+    } finally {
+        setLocalFontsLoading(false);
+    }
+  };
+
+  const handlePickLocalFont = (family: string) => {
+    const value = `"${family}", sans-serif`;
+    store.updateText({ font: value });
+    setLocalFontsOpen(false);
+    setLocalFontQuery('');
+  };
+
   const handleExport = async () => {
-    // This requires accessing the DOM node. 
-    // Ideally, we pass a ref or use an ID.
-    // We'll target the container inside Canvas.
-    // Since Controls is a sibling, we might need a way to signal.
-    // For now, let's assume we can find the element by a known ID or class.
-    // But `html-to-image` works best if we have the Ref.
-    // I will dispatch a custom event or use a global ID.
-    // Let's add an ID to the Canvas container in Canvas.tsx: id="canvas-export-target"
-    
     const node = document.getElementById('canvas-export-target');
     if (!node) return;
 
-    // We might need to handle scaling back to 1 before export, or html-to-image handles it.
-    // Usually better to clone and export.
-    // For now, simple attempt:
+    const options = {
+      quality: 0.95,
+      pixelRatio: 2,
+      cacheBust: true,
+      filter: (n: HTMLElement) => !(n.classList && n.classList.contains('export-exclude')),
+    };
+
     try {
-      const dataUrl = await toPng(node as HTMLElement, { 
-          quality: 0.95, 
-          pixelRatio: 1,
-          filter: (node) => {
-              // Exclude elements with the class 'export-exclude'
-              if (node.classList && node.classList.contains('export-exclude')) {
-                  return false;
-              }
-              return true;
-          }
-      });
+      if (document.fonts && (document.fonts as any).ready) {
+        await (document.fonts as any).ready;
+      }
+
+      const images = Array.from(node.querySelectorAll('img'));
+      await Promise.all(
+        images.map((img) => {
+          if (img.complete && img.naturalHeight !== 0) return Promise.resolve();
+          return new Promise<void>((resolve) => {
+            const done = () => resolve();
+            img.addEventListener('load', done, { once: true });
+            img.addEventListener('error', done, { once: true });
+          });
+        })
+      );
+
+      // Warm-up: html-to-image's first call often misses lazily-loaded resources
+      // (Iconify SVGs, custom fonts, drop-shadow filter targets). Discard it.
+      await toPng(node as HTMLElement, options);
+      const dataUrl = await toPng(node as HTMLElement, options);
+
       const link = document.createElement('a');
       link.download = 'easy-cover.png';
       link.href = dataUrl;
       link.click();
     } catch (err) {
       console.error('Export failed', err);
+      alert('导出失败，请重试');
     }
   };
 
@@ -237,22 +278,32 @@ export default function Controls() {
   };
 
   const [activeTab, setActiveTab] = React.useState('picker');
-  const [syncOffsets, setSyncOffsets] = React.useState(true);
+  const [lockedAxes, setLockedAxes] = React.useState<Record<string, boolean>>({
+    offsetX: true,
+    offsetY: true,
+  });
+  // false = mirror (正反, default: left +X → right -X), true = same direction (正正, left +X → right +X)
+  const [lockMode, setLockMode] = React.useState<Record<string, boolean>>({
+    offsetX: false,
+    offsetY: false,
+  });
+  const toggleLock = (key: string) => setLockedAxes((prev) => ({ ...prev, [key]: !prev[key] }));
+  const toggleLockMode = (key: string) => setLockMode((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  // Sync effect for left offset changes
   const handleLeftOffsetChange = (axis: 'x' | 'y', val: number) => {
+      const key = axis === 'x' ? 'offsetX' : 'offsetY';
       const updates: any = { [axis === 'x' ? 'leftOffsetX' : 'leftOffsetY']: val };
-      if (syncOffsets) {
-          updates[axis === 'x' ? 'rightOffsetX' : 'rightOffsetY'] = -val;
+      if (lockedAxes[key]) {
+          updates[axis === 'x' ? 'rightOffsetX' : 'rightOffsetY'] = lockMode[key] ? val : -val;
       }
       store.updateText(updates);
   };
 
-  // Sync effect for right offset changes
   const handleRightOffsetChange = (axis: 'x' | 'y', val: number) => {
+      const key = axis === 'x' ? 'offsetX' : 'offsetY';
       const updates: any = { [axis === 'x' ? 'rightOffsetX' : 'rightOffsetY']: val };
-      if (syncOffsets) {
-          updates[axis === 'x' ? 'leftOffsetX' : 'leftOffsetY'] = -val;
+      if (lockedAxes[key]) {
+          updates[axis === 'x' ? 'leftOffsetX' : 'leftOffsetY'] = lockMode[key] ? val : -val;
       }
       store.updateText(updates);
   };
@@ -310,10 +361,15 @@ export default function Controls() {
           <section className="space-y-3">
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">文字设置</h3>
             <div className="space-y-2">
-              <Label>内容</Label>
-              <Input 
-                value={store.text.content} 
-                onChange={(e) => store.updateText({ content: e.target.value })} 
+              <Label>左侧内容</Label>
+              <Input
+                value={store.text.leftContent}
+                onChange={(e) => store.updateText({ leftContent: e.target.value })}
+              />
+              <Label>右侧内容</Label>
+              <Input
+                value={store.text.rightContent}
+                onChange={(e) => store.updateText({ rightContent: e.target.value })}
               />
             </div>
             
@@ -339,9 +395,9 @@ export default function Controls() {
                    </Select>
                    
                    <div className="relative">
-                       <Input 
-                           type="file" 
-                           accept=".ttf,.otf,.woff,.woff2" 
+                       <Input
+                           type="file"
+                           accept=".ttf,.otf,.woff,.woff2"
                            className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
                            onChange={handleFontUpload}
                            title="上传字体"
@@ -350,6 +406,69 @@ export default function Controls() {
                            <Upload className="h-4 w-4" />
                        </Button>
                    </div>
+
+                   <Popover open={localFontsOpen} onOpenChange={setLocalFontsOpen}>
+                       <PopoverTrigger asChild>
+                           <Button
+                               variant="outline"
+                               size="icon"
+                               className="w-10 px-0"
+                               title={isLocalFontApiSupported ? '从本机字体中选择' : '当前浏览器不支持本地字体 API'}
+                               disabled={!isLocalFontApiSupported}
+                               onClick={(e) => {
+                                   if (localFonts.length === 0) {
+                                       e.preventDefault();
+                                       handleLoadLocalFonts();
+                                   }
+                               }}
+                           >
+                               {localFontsLoading ? (
+                                   <RotateCcw className="h-4 w-4 animate-spin" />
+                               ) : (
+                                   <HardDrive className="h-4 w-4" />
+                               )}
+                           </Button>
+                       </PopoverTrigger>
+                       <PopoverContent className="w-[280px] p-0" align="end">
+                           <div className="p-2 border-b">
+                               <div className="relative">
+                                   <Search className="absolute left-2 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                                   <Input
+                                       placeholder="搜索本机字体..."
+                                       className="pl-7 h-8 text-xs"
+                                       value={localFontQuery}
+                                       onChange={(e) => setLocalFontQuery(e.target.value)}
+                                   />
+                               </div>
+                               <div className="text-[10px] text-muted-foreground mt-1 px-1">
+                                   共 {localFonts.length} 个字体族
+                               </div>
+                           </div>
+                           <ScrollArea className="h-[280px]">
+                               <div className="p-1">
+                                   {localFonts
+                                       .filter((f) => !localFontQuery || f.family.toLowerCase().includes(localFontQuery.toLowerCase()))
+                                       .slice(0, 200)
+                                       .map((f) => (
+                                           <button
+                                               key={f.postscriptName || f.family}
+                                               className="w-full text-left px-2 py-1.5 text-sm rounded hover:bg-accent flex items-center justify-between gap-2"
+                                               onClick={() => handlePickLocalFont(f.family)}
+                                           >
+                                               <span className="truncate" style={{ fontFamily: `"${f.family}"` }}>
+                                                   {f.family}
+                                               </span>
+                                           </button>
+                                       ))}
+                                   {localFonts.length === 0 && (
+                                       <div className="text-center text-xs text-muted-foreground py-6">
+                                           点击按钮加载本机字体
+                                       </div>
+                                   )}
+                               </div>
+                           </ScrollArea>
+                       </PopoverContent>
+                   </Popover>
                </div>
             </div>
 
@@ -358,23 +477,13 @@ export default function Controls() {
                    <Label>字重 ({store.text.fontWeight})</Label>
                    <ResetButton onClick={() => store.updateText({ fontWeight: 700 })} />
                </div>
-               <Select value={String(store.text.fontWeight)} onValueChange={(v) => store.updateText({ fontWeight: parseInt(v) })}>
-                   <SelectTrigger>
-                       <SelectValue placeholder="选择字重" />
-                   </SelectTrigger>
-                   <SelectContent>
-                       {(() => {
-                           const currentFont = FONTS.find(f => f.value === store.text.font);
-                           const availableWeights = currentFont?.weights || [100, 200, 300, 400, 500, 600, 700, 800, 900];
-                           
-                           return availableWeights.map(w => (
-                               <SelectItem key={w} value={String(w)}>
-                                   {WEIGHTS[w as keyof typeof WEIGHTS]}
-                               </SelectItem>
-                           ));
-                       })()}
-                   </SelectContent>
-               </Select>
+               <Slider
+                   value={[store.text.fontWeight]}
+                   min={100}
+                   max={900}
+                   step={1}
+                   onValueChange={(v) => store.updateText({ fontWeight: v[0] })}
+               />
             </div>
 
             <div className="space-y-2">
@@ -382,12 +491,12 @@ export default function Controls() {
                  <Label>大小 ({store.text.fontSize}px)</Label>
                  <ResetButton onClick={() => store.updateText({ fontSize: 160 })} />
               </div>
-              <Slider 
-                value={[store.text.fontSize]} 
-                min={12} 
-                max={2500} 
-                step={1} 
-                onValueChange={(v) => store.updateText({ fontSize: v[0] })} 
+              <Slider
+                value={[store.text.fontSize]}
+                min={12}
+                max={pct(1.5)}
+                step={1}
+                onValueChange={(v) => store.updateText({ fontSize: v[0] })}
               />
             </div>
 
@@ -401,12 +510,12 @@ export default function Controls() {
                    <Label>描边宽度</Label>
                    <ResetButton onClick={() => store.updateText({ strokeWidth: 0 })} />
                </div>
-               <Slider 
-                 value={[store.text.strokeWidth]} 
-                 min={0} 
-                 max={10} 
-                 step={0.5} 
-                 onValueChange={(v) => store.updateText({ strokeWidth: v[0] })} 
+               <Slider
+                 value={[store.text.strokeWidth]}
+                 min={0}
+                 max={pct(0.01)}
+                 step={0.5}
+                 onValueChange={(v) => store.updateText({ strokeWidth: v[0] })}
                />
             </div>
 
@@ -415,83 +524,197 @@ export default function Controls() {
                <ColorPicker color={store.text.strokeColor} onChange={(c) => store.updateText({ strokeColor: c })} />
             </div>
 
-            <div className="flex items-center justify-between">
-               <Label htmlFor="text-split">文字错位 / 分离</Label>
-               <Switch 
-                 id="text-split" 
-                 checked={store.text.isSplit} 
-                 onCheckedChange={(c) => store.updateText({ isSplit: c })} 
-               />
-            </div>
+            <div className="space-y-3 p-3 bg-muted/30 rounded-lg border">
+                <div className="flex items-center justify-between mb-1">
+                    <Label className="text-xs font-semibold">文字错位 / 分离</Label>
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={() => store.updateText({
+                            leftOffsetX: 0,
+                            leftOffsetY: 0,
+                            rightOffsetX: 0,
+                            rightOffsetY: 0,
+                            leftAlign: 'center',
+                            rightAlign: 'center',
+                        })}
+                    >
+                        <RotateCcw className="h-3 w-3 mr-1" />
+                        重置
+                    </Button>
+                </div>
 
-            {store.text.isSplit && (
-                <div className="space-y-3 p-3 bg-muted/30 rounded-lg border">
-                    <div className="grid grid-cols-3 gap-1 mb-2">
-                        {SPLIT_PRESETS.map((preset) => (
-                            <Button
-                                key={preset.name}
-                                variant="outline"
-                                size="sm"
-                                className="text-[10px] h-6 px-1"
-                                onClick={() => store.updateText({
-                                    leftOffsetX: preset.left.x,
-                                    leftOffsetY: preset.left.y,
-                                    rightOffsetX: preset.right.x,
-                                    rightOffsetY: preset.right.y
-                                })}
-                            >
-                                {preset.name}
-                            </Button>
-                        ))}
+                <div className="space-y-2">
+                    <Label className="text-xs font-semibold">左侧文字</Label>
+                    <div className="flex items-center justify-between">
+                        <Label className="text-[10px] text-muted-foreground">对齐</Label>
+                        <div className="flex gap-1">
+                            {(['left', 'center', 'right'] as const).map((a) => {
+                                const Icon = a === 'left' ? AlignLeft : a === 'center' ? AlignCenter : AlignRight;
+                                return (
+                                    <Button
+                                        key={a}
+                                        variant={store.text.leftAlign === a ? 'default' : 'outline'}
+                                        size="icon"
+                                        className="h-6 w-6"
+                                        onClick={() => store.updateText({ leftAlign: a })}
+                                    >
+                                        <Icon className="h-3 w-3" />
+                                    </Button>
+                                );
+                            })}
+                        </div>
                     </div>
-
-                    <div className="space-y-2">
-                        <div className="flex items-center justify-between px-1 pb-2">
-                            <Label htmlFor="sync-offsets" className="text-xs font-medium">同步调整 (中心对称)</Label>
-                            <Switch 
-                                id="sync-offsets" 
-                                checked={syncOffsets} 
-                                onCheckedChange={setSyncOffsets} 
-                                className="scale-75 origin-right"
+                    <div className="flex items-center gap-1">
+                        <div className="flex-1">
+                            <SliderWithInput
+                                label="水平偏移"
+                                value={store.text.leftOffsetX}
+                                min={-pct(0.3)}
+                                max={pct(0.3)}
+                                onChange={(v) => handleLeftOffsetChange('x', v)}
                             />
                         </div>
-
-                        <Label className="text-xs font-semibold">左侧文字</Label>
-                        <SliderWithInput 
-                            label="水平偏移" 
-                            value={store.text.leftOffsetX} 
-                            min={-200} 
-                            max={200} 
-                            onChange={(v) => handleLeftOffsetChange('x', v)} 
-                        />
-                        <SliderWithInput 
-                            label="垂直偏移" 
-                            value={store.text.leftOffsetY} 
-                            min={-200} 
-                            max={200} 
-                            onChange={(v) => handleLeftOffsetChange('y', v)} 
-                        />
+                        <div className="flex flex-col items-center gap-0.5 mt-4">
+                            <button
+                                className="p-0.5 rounded hover:bg-accent"
+                                onClick={() => toggleLock('offsetX')}
+                                title={lockedAxes.offsetX ? '已锁定：左右水平同步' : '未锁定'}
+                            >
+                                {lockedAxes.offsetX ? <Lock className="h-3.5 w-3.5 text-primary" /> : <Unlock className="h-3.5 w-3.5 text-muted-foreground" />}
+                            </button>
+                            {lockedAxes.offsetX && (
+                                <button
+                                    className="p-0.5 rounded hover:bg-accent"
+                                    onClick={() => toggleLockMode('offsetX')}
+                                    title={lockMode.offsetX ? '正正：同向移动' : '正反：镜像移动'}
+                                >
+                                    {lockMode.offsetX
+                                        ? <MoveRight className="h-3 w-3 text-primary" />
+                                        : <ArrowLeftRight className="h-3 w-3 text-primary" />}
+                                </button>
+                            )}
+                        </div>
                     </div>
-
-                    <div className="space-y-2 pt-2 border-t border-dashed">
-                        <Label className="text-xs font-semibold">右侧文字</Label>
-                        <SliderWithInput 
-                            label="水平偏移" 
-                            value={store.text.rightOffsetX} 
-                            min={-200} 
-                            max={200} 
-                            onChange={(v) => handleRightOffsetChange('x', v)} 
-                        />
-                        <SliderWithInput 
-                            label="垂直偏移" 
-                            value={store.text.rightOffsetY} 
-                            min={-200} 
-                            max={200} 
-                            onChange={(v) => handleRightOffsetChange('y', v)} 
-                        />
+                    <div className="flex items-center gap-1">
+                        <div className="flex-1">
+                            <SliderWithInput
+                                label="垂直偏移"
+                                value={store.text.leftOffsetY}
+                                min={-pct(0.3)}
+                                max={pct(0.3)}
+                                onChange={(v) => handleLeftOffsetChange('y', v)}
+                            />
+                        </div>
+                        <div className="flex flex-col items-center gap-0.5 mt-4">
+                            <button
+                                className="p-0.5 rounded hover:bg-accent"
+                                onClick={() => toggleLock('offsetY')}
+                                title={lockedAxes.offsetY ? '已锁定：左右垂直同步' : '未锁定'}
+                            >
+                                {lockedAxes.offsetY ? <Lock className="h-3.5 w-3.5 text-primary" /> : <Unlock className="h-3.5 w-3.5 text-muted-foreground" />}
+                            </button>
+                            {lockedAxes.offsetY && (
+                                <button
+                                    className="p-0.5 rounded hover:bg-accent"
+                                    onClick={() => toggleLockMode('offsetY')}
+                                    title={lockMode.offsetY ? '正正：同向移动' : '正反：镜像移动'}
+                                >
+                                    {lockMode.offsetY
+                                        ? <MoveRight className="h-3 w-3 text-primary" />
+                                        : <ArrowLeftRight className="h-3 w-3 text-primary" />}
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
-            )}
+
+                <div className="space-y-2 pt-2 border-t border-dashed">
+                    <Label className="text-xs font-semibold">右侧文字</Label>
+                    <div className="flex items-center justify-between">
+                        <Label className="text-[10px] text-muted-foreground">对齐</Label>
+                        <div className="flex gap-1">
+                            {(['left', 'center', 'right'] as const).map((a) => {
+                                const Icon = a === 'left' ? AlignLeft : a === 'center' ? AlignCenter : AlignRight;
+                                return (
+                                    <Button
+                                        key={a}
+                                        variant={store.text.rightAlign === a ? 'default' : 'outline'}
+                                        size="icon"
+                                        className="h-6 w-6"
+                                        onClick={() => store.updateText({ rightAlign: a })}
+                                    >
+                                        <Icon className="h-3 w-3" />
+                                    </Button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                        <div className="flex-1">
+                            <SliderWithInput
+                                label="水平偏移"
+                                value={store.text.rightOffsetX}
+                                min={-pct(0.3)}
+                                max={pct(0.3)}
+                                onChange={(v) => handleRightOffsetChange('x', v)}
+                            />
+                        </div>
+                        <div className="flex flex-col items-center gap-0.5 mt-4">
+                            <button
+                                className="p-0.5 rounded hover:bg-accent"
+                                onClick={() => toggleLock('offsetX')}
+                                title={lockedAxes.offsetX ? '已锁定：左右水平同步' : '未锁定'}
+                            >
+                                {lockedAxes.offsetX ? <Lock className="h-3.5 w-3.5 text-primary" /> : <Unlock className="h-3.5 w-3.5 text-muted-foreground" />}
+                            </button>
+                            {lockedAxes.offsetX && (
+                                <button
+                                    className="p-0.5 rounded hover:bg-accent"
+                                    onClick={() => toggleLockMode('offsetX')}
+                                    title={lockMode.offsetX ? '正正：同向移动' : '正反：镜像移动'}
+                                >
+                                    {lockMode.offsetX
+                                        ? <MoveRight className="h-3 w-3 text-primary" />
+                                        : <ArrowLeftRight className="h-3 w-3 text-primary" />}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                        <div className="flex-1">
+                            <SliderWithInput
+                                label="垂直偏移"
+                                value={store.text.rightOffsetY}
+                                min={-pct(0.3)}
+                                max={pct(0.3)}
+                                onChange={(v) => handleRightOffsetChange('y', v)}
+                            />
+                        </div>
+                        <div className="flex flex-col items-center gap-0.5 mt-4">
+                            <button
+                                className="p-0.5 rounded hover:bg-accent"
+                                onClick={() => toggleLock('offsetY')}
+                                title={lockedAxes.offsetY ? '已锁定：左右垂直同步' : '未锁定'}
+                            >
+                                {lockedAxes.offsetY ? <Lock className="h-3.5 w-3.5 text-primary" /> : <Unlock className="h-3.5 w-3.5 text-muted-foreground" />}
+                            </button>
+                            {lockedAxes.offsetY && (
+                                <button
+                                    className="p-0.5 rounded hover:bg-accent"
+                                    onClick={() => toggleLockMode('offsetY')}
+                                    title={lockMode.offsetY ? '正正：同向移动' : '正反：镜像移动'}
+                                >
+                                    {lockMode.offsetY
+                                        ? <MoveRight className="h-3 w-3 text-primary" />
+                                        : <ArrowLeftRight className="h-3 w-3 text-primary" />}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <div className="space-y-2">
                <div className="flex justify-between items-center">
@@ -512,8 +735,47 @@ export default function Controls() {
 
           {/* Icon Section */}
           <section className="space-y-3">
-            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">图标设置</h3>
-            
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">图标设置</h3>
+              <div className="flex items-center gap-2">
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    title="复位图标位置"
+                    onClick={() => store.updateIcon({ x: 0, y: 0 })}
+                >
+                    <RotateCcw className="h-3 w-3" />
+                </Button>
+                <Switch
+                  checked={store.icon.visible}
+                  onCheckedChange={(c) => store.updateIcon({ visible: c })}
+                />
+              </div>
+            </div>
+
+            {store.icon.visible && (<>
+            <div className="flex items-center justify-between">
+                <Label>图标层级</Label>
+                <div className="flex gap-1">
+                    {([
+                        { value: 'left', label: '左侧' },
+                        { value: 'front', label: '前面' },
+                        { value: 'behind', label: '后面' },
+                        { value: 'right', label: '右侧' },
+                    ] as const).map((opt) => (
+                        <Button
+                            key={opt.value}
+                            variant={store.icon.placement === opt.value ? 'default' : 'outline'}
+                            size="sm"
+                            className="h-6 text-[10px] px-2"
+                            onClick={() => store.updateIcon({ placement: opt.value })}
+                        >
+                            {opt.label}
+                        </Button>
+                    ))}
+                </div>
+            </div>
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
                     <TabsTrigger value="picker">选择图标</TabsTrigger>
@@ -558,15 +820,15 @@ export default function Controls() {
                             <>
                                 <div className="space-y-2">
                                     <div className="flex justify-between items-center">
-                                        <Label className="text-xs">图片圆角 ({store.icon.customIconRadius}px)</Label>
+                                        <Label className="text-xs">图片圆角 ({store.icon.customIconRadius}%)</Label>
                                         <ResetButton onClick={() => store.updateIcon({ customIconRadius: 0 })} />
                                     </div>
-                                    <Slider 
-                                        value={[store.icon.customIconRadius]} 
-                                        min={0} 
-                                        max={1000} 
-                                        step={5} 
-                                        onValueChange={(v) => store.updateIcon({ customIconRadius: v[0] })} 
+                                    <Slider
+                                        value={[store.icon.customIconRadius]}
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        onValueChange={(v) => store.updateIcon({ customIconRadius: v[0] })}
                                     />
                                 </div>
 
@@ -589,14 +851,29 @@ export default function Controls() {
                    <Label>大小 ({store.icon.size}px)</Label>
                    <ResetButton onClick={() => store.updateIcon({ size: 120 })} />
                </div>
-               <Slider 
-                 value={[store.icon.size]} 
-                 min={20} 
-                 max={2500} 
-                 step={5} 
-                 onValueChange={(v) => store.updateIcon({ size: v[0] })} 
+               <Slider
+                 value={[store.icon.size]}
+                 min={20}
+                 max={pct(1.5)}
+                 step={5}
+                 onValueChange={(v) => store.updateIcon({ size: v[0] })}
                />
             </div>
+
+            <SliderWithInput
+                label={`水平位置 (${store.icon.x})`}
+                value={store.icon.x}
+                min={-pct(0.5)}
+                max={pct(0.5)}
+                onChange={(v) => store.updateIcon({ x: v })}
+            />
+            <SliderWithInput
+                label={`垂直位置 (${store.icon.y})`}
+                value={store.icon.y}
+                min={-pct(0.5)}
+                max={pct(0.5)}
+                onChange={(v) => store.updateIcon({ y: v })}
+            />
 
             <div className="space-y-2">
                <div className="flex justify-between items-center">
@@ -638,12 +915,12 @@ export default function Controls() {
                             <Label className="text-xs">模糊 ({store.icon.shadowBlur}px)</Label>
                             <ResetButton onClick={() => store.updateIcon({ shadowBlur: 6 })} />
                         </div>
-                        <Slider 
-                            value={[store.icon.shadowBlur]} 
-                            min={0} 
-                            max={100} 
-                            step={1} 
-                            onValueChange={(v) => store.updateIcon({ shadowBlur: v[0] })} 
+                        <Slider
+                            value={[store.icon.shadowBlur]}
+                            min={0}
+                            max={pct(0.1)}
+                            step={1}
+                            onValueChange={(v) => store.updateIcon({ shadowBlur: v[0] })}
                         />
                     </div>
 
@@ -652,12 +929,12 @@ export default function Controls() {
                             <Label className="text-xs">垂直偏移 ({store.icon.shadowOffsetY}px)</Label>
                             <ResetButton onClick={() => store.updateIcon({ shadowOffsetY: 4 })} />
                         </div>
-                        <Slider 
-                            value={[store.icon.shadowOffsetY]} 
-                            min={-50} 
-                            max={50} 
-                            step={1} 
-                            onValueChange={(v) => store.updateIcon({ shadowOffsetY: v[0] })} 
+                        <Slider
+                            value={[store.icon.shadowOffsetY]}
+                            min={-pct(0.05)}
+                            max={pct(0.05)}
+                            step={1}
+                            onValueChange={(v) => store.updateIcon({ shadowOffsetY: v[0] })}
                         />
                     </div>
                 </div>
@@ -688,29 +965,29 @@ export default function Controls() {
                     </div>
                     <div className="space-y-2">
                         <div className="flex justify-between items-center">
-                            <Label>内边距 ({store.icon.padding}px)</Label>
-                            <ResetButton onClick={() => store.updateIcon({ padding: 40 })} />
+                            <Label>内边距 ({store.icon.padding}%)</Label>
+                            <ResetButton onClick={() => store.updateIcon({ padding: 30 })} />
                         </div>
-                        <Slider 
-                            value={[store.icon.padding]} 
-                            min={0} 
-                            max={100} 
-                            step={5} 
-                            onValueChange={(v) => store.updateIcon({ padding: v[0] })} 
+                        <Slider
+                            value={[store.icon.padding]}
+                            min={0}
+                            max={100}
+                            step={1}
+                            onValueChange={(v) => store.updateIcon({ padding: v[0] })}
                         />
                     </div>
                     {store.icon.bgShape === 'rounded-square' && (
                         <div className="space-y-2">
                             <div className="flex justify-between items-center">
-                                <Label>容器圆角 ({store.icon.radius}px)</Label>
-                                <ResetButton onClick={() => store.updateIcon({ radius: 40 })} />
+                                <Label>容器圆角 ({store.icon.radius}%)</Label>
+                                <ResetButton onClick={() => store.updateIcon({ radius: 20 })} />
                             </div>
-                            <Slider 
-                                value={[store.icon.radius]} 
-                                min={0} 
-                                max={200} 
-                                step={5} 
-                                onValueChange={(v) => store.updateIcon({ radius: v[0] })} 
+                            <Slider
+                                value={[store.icon.radius]}
+                                min={0}
+                                max={100}
+                                step={1}
+                                onValueChange={(v) => store.updateIcon({ radius: v[0] })}
                             />
                         </div>
                     )}
@@ -734,16 +1011,17 @@ export default function Controls() {
                             <Label>容器模糊 ({(store.icon.bgBlur)}px)</Label>
                             <ResetButton onClick={() => store.updateIcon({ bgBlur: 0 })} />
                         </div>
-                        <Slider 
-                            value={[store.icon.bgBlur]} 
-                            min={0} 
-                            max={50} 
-                            step={1} 
-                            onValueChange={(v) => store.updateIcon({ bgBlur: v[0] })} 
+                        <Slider
+                            value={[store.icon.bgBlur]}
+                            min={0}
+                            max={pct(0.05)}
+                            step={1}
+                            onValueChange={(v) => store.updateIcon({ bgBlur: v[0] })}
                         />
                     </div>
                 </>
             )}
+            </>)}
           </section>
 
           <Separator />
@@ -773,12 +1051,12 @@ export default function Controls() {
                             <Label>高斯模糊 ({store.background.blur}px)</Label>
                             <ResetButton onClick={() => store.updateBackground({ blur: 0 })} />
                         </div>
-                        <Slider 
-                            value={[store.background.blur]} 
-                            min={0} 
-                            max={50} 
-                            step={1} 
-                            onValueChange={(v) => store.updateBackground({ blur: v[0] })} 
+                        <Slider
+                            value={[store.background.blur]}
+                            min={0}
+                            max={pct(0.05)}
+                            step={1}
+                            onValueChange={(v) => store.updateBackground({ blur: v[0] })}
                         />
                     </div>
                     
@@ -885,12 +1163,12 @@ export default function Controls() {
                             <Label className="text-xs">模糊 ({store.background.shadowBlur}px)</Label>
                             <ResetButton onClick={() => store.updateBackground({ shadowBlur: 30 })} />
                         </div>
-                        <Slider 
-                            value={[store.background.shadowBlur]} 
-                            min={0} 
-                            max={200} 
-                            step={1} 
-                            onValueChange={(v) => store.updateBackground({ shadowBlur: v[0] })} 
+                        <Slider
+                            value={[store.background.shadowBlur]}
+                            min={0}
+                            max={pct(0.2)}
+                            step={1}
+                            onValueChange={(v) => store.updateBackground({ shadowBlur: v[0] })}
                         />
                     </div>
 
@@ -899,12 +1177,12 @@ export default function Controls() {
                             <Label className="text-xs">垂直偏移 ({store.background.shadowOffsetY}px)</Label>
                             <ResetButton onClick={() => store.updateBackground({ shadowOffsetY: 10 })} />
                         </div>
-                        <Slider 
-                            value={[store.background.shadowOffsetY]} 
-                            min={-100} 
-                            max={100} 
-                            step={1} 
-                            onValueChange={(v) => store.updateBackground({ shadowOffsetY: v[0] })} 
+                        <Slider
+                            value={[store.background.shadowOffsetY]}
+                            min={-pct(0.1)}
+                            max={pct(0.1)}
+                            step={1}
+                            onValueChange={(v) => store.updateBackground({ shadowOffsetY: v[0] })}
                         />
                     </div>
                 </div>
